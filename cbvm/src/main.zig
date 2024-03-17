@@ -5,9 +5,25 @@ const VMError = error{
     DecodeError,
     UnknownRegister,
     CodeOverflow,
+    InvalidBinaryFormat,
+    InvalidBinaryVersion,
+    InvalidBytecode,
 };
 
-const VMType = enum { int, uint, bool };
+const VMType = enum {
+    uint,
+    int,
+    bool,
+
+    pub fn from_byte(byte: u8) VMError!VMType {
+        return switch (byte) {
+            0 => .uint,
+            1 => .int,
+            2 => .bool,
+            else => VMError.InvalidBytecode,
+        };
+    }
+};
 
 const VMValue = struct {
     type: VMType,
@@ -60,6 +76,7 @@ const VMInstruction = struct {
 };
 
 const VMContext = struct {
+    allocator: std.heap.ArenaAllocator,
     heap: std.mem.Allocator,
     stack: std.ArrayList(VMValue),
     code: []u8,
@@ -68,9 +85,15 @@ const VMContext = struct {
     _ip: usize,
 
     pub fn new(code: []u8) VMContext {
-        var heap = std.heap.ArenaAllocator.init(std.heap.page_allocator).allocator();
+        var allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        var heap = allocator.allocator();
         var stack = std.ArrayList(VMValue).init(heap);
-        return VMContext{ .heap = heap, .stack = stack, .code = code, .registers = undefined, ._ip = 0 };
+        return VMContext{ .allocator = allocator, .heap = heap, .stack = stack, .code = code, .registers = undefined, ._ip = 0 };
+    }
+
+    pub fn deinit(self: *VMContext) void {
+        self.stack.deinit();
+        self.allocator.deinit();
     }
 
     pub fn push(self: *VMContext, value: VMValue) !void {
@@ -118,10 +141,156 @@ const VMContext = struct {
     }
 };
 
-test "VMContext.push" {
+test "VMContext stack" {
     var buf = [0]u8{};
     var vm = VMContext.new(&buf);
+    defer vm.deinit();
     try vm.push(VMValue.from_usize(69));
     var val = try vm.pop();
     try std.testing.expect(val.value.uint == 69);
+}
+
+const Function = struct {
+    // func_sz: usize,
+    name: []u8,
+    // arg_c: usize,
+    args: []VMType,
+    // ret_c: usize,
+    rets: []VMType,
+    // code_sz: usize,
+    code: []u8,
+
+    _allocator: std.mem.Allocator,
+
+    pub fn from_bytes(bytes: []u8, allocator: std.mem.Allocator) !Function {
+        var ip: usize = @sizeOf(usize);
+        const name_sz = std.mem.readIntSliceLittle(usize, bytes[0..@sizeOf(usize)]);
+        var name = bytes[ip .. ip + name_sz];
+        ip += name_sz;
+        std.log.debug("fn {s}", .{name});
+
+        const args_sz = std.mem.readIntSliceLittle(usize, bytes[ip .. ip + @sizeOf(usize)]);
+        ip += @sizeOf(usize);
+        var args: []VMType = try allocator.alloc(VMType, args_sz);
+        var processed_args: usize = 0;
+        while (processed_args < args_sz) {
+            args[processed_args] = try VMType.from_byte(bytes[ip]);
+            std.log.debug("- arg: {s}", .{@tagName(args[processed_args])});
+            ip += 1;
+            processed_args += 1;
+        }
+
+        const rets_sz = std.mem.readIntSliceLittle(usize, bytes[ip .. ip + @sizeOf(usize)]);
+        ip += @sizeOf(usize);
+        std.log.debug("{d} ret types", .{rets_sz});
+
+        var rets: []VMType = try allocator.alloc(VMType, rets_sz);
+        var processed_rets: usize = 0;
+        while (processed_rets < rets_sz) {
+            rets[processed_rets] = try VMType.from_byte(bytes[ip]);
+            std.log.debug("- ret: {s}", .{@tagName(rets[processed_rets])});
+            ip += 1;
+            processed_rets += 1;
+        }
+
+        const code_sz = std.mem.readIntSliceLittle(usize, bytes[ip .. ip + @sizeOf(usize)]);
+        ip += @sizeOf(usize);
+        var code: []u8 = try allocator.alloc(u8, code_sz);
+        code = bytes[ip .. ip + code_sz];
+
+        return Function{ .name = name, .args = args, .rets = rets, .code = code, ._allocator = allocator };
+    }
+
+    pub fn deinit(self: *const Function) void {
+        // self._allocator.free(self.rets);
+        // self._allocator.free(self.args);
+        _ = self;
+    }
+};
+
+const Binary = struct {
+    // magic: [4]u8, // = "cbvm"
+    // version: u8, // = 0
+    // function_c: usize
+    functions: []Function,
+
+    _allocator: std.mem.Allocator,
+
+    pub fn from_bytes(bytes: []u8, allocator: std.mem.Allocator) !Binary {
+        const min_sz = 5 + @sizeOf(usize);
+        if (bytes.len < min_sz) {
+            return VMError.InvalidBinaryFormat;
+        }
+
+        const magic = bytes[0..4];
+        if (!std.mem.eql(u8, magic, "cbvm")) {
+            return VMError.InvalidBinaryFormat;
+        }
+
+        const version = bytes[4];
+        if (version != 0) {
+            return VMError.InvalidBinaryVersion;
+        }
+
+        const function_c = std.mem.readIntSliceLittle(usize, bytes[5 .. 5 + @sizeOf(usize)]);
+        std.log.debug("{d} functions in binary", .{function_c});
+        var ip: usize = 5 + @sizeOf(usize);
+
+        var functions = try allocator.alloc(Function, function_c);
+        var processed_funcs: usize = 0;
+        while (functions.len < function_c) {
+            const fn_sz = std.mem.readIntSliceLittle(usize, bytes[ip .. ip + @sizeOf(usize)]);
+            ip += @sizeOf(usize);
+            functions[processed_funcs] = (try Function.from_bytes(bytes[ip .. ip + fn_sz], allocator));
+            processed_funcs += 1;
+            ip += fn_sz;
+        }
+
+        return Binary{ .functions = functions, ._allocator = allocator };
+    }
+
+    pub fn deinit(self: *Binary) void {
+        for (self.functions) |i| {
+            i.deinit();
+        }
+
+        self._allocator.free(self.functions);
+    }
+};
+
+fn read_file(path: []u8, allocator: std.mem.Allocator) ![]u8 {
+    var path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+    const realpath = try std.fs.realpath(path, &path_buffer);
+
+    const file = try std.fs.openFileAbsolute(realpath, .{ .read = true });
+    defer file.close();
+
+    return try file.readToEndAlloc(allocator, std.math.maxInt(usize));
+}
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{
+        .safety = true,
+        // .verbose_log = true,
+    }){};
+    defer _ = gpa.deinit();
+    var allocator = gpa.allocator();
+
+    var argv = std.process.args();
+    defer argv.deinit();
+
+    const program = try argv.next(allocator).?;
+    defer allocator.free(program);
+
+    const file_path = try argv.next(allocator).?;
+    defer allocator.free(file_path);
+
+    const file = try read_file(file_path, allocator);
+    defer allocator.free(file);
+
+    var bin = try Binary.from_bytes(file, allocator);
+    defer bin.deinit();
+
+    // std.debug.print("{s}", .{file});
+    _ = program;
 }
