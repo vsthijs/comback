@@ -50,6 +50,7 @@ def run_multiple(tests: list[Test]):
     total = len(tests)
     failed = []
     for index, test in enumerate(tests):
+        os.chdir(projdir)
         print(f"test ({index+1}/{total}) {test.name}...", end=" ")
         stdout = io.StringIO()
         with redirect_stdout(stdout):

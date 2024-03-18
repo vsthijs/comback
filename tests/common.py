@@ -5,6 +5,13 @@ Contains common used tools for testing and manipulation of binaries
 from dataclasses import dataclass
 import sys
 import typing
+import os
+import subprocess
+
+
+testsdir = os.path.dirname(__file__)
+projdir = os.path.dirname(testsdir)
+cbvmdir = os.path.join(projdir, "cbvm")
 
 
 def i2t(i: int) -> str:
@@ -170,3 +177,27 @@ def expect(fn: typing.Callable, e: type[Exception], *args, **kwargs):
     except e as ex:
         print(f"expected {e}")
         return
+
+
+def executable() -> str:
+    """Returns the path of the cbvm executable, and builds it if it does not exist."""
+
+    if sys.platform == "linux":
+        exepath = os.path.join(cbvmdir, "zig-out", "bin", "cbvm")  # on linux
+    elif sys.platform == "win32":
+        exepath = os.path.join(cbvmdir, "zig-out", "bin", "cbvm.exe")  # on windows
+    else:
+        raise RuntimeError("unrecognized platform.")
+
+    if not os.path.exists(exepath):
+        old = os.getcwd()
+        try:
+            os.chdir(cbvmdir)
+            if (
+                ret := subprocess.call(["zig", "build"], stdout=subprocess.DEVNULL)
+            ) != 0:
+                raise RuntimeError(f"the build of cbvm failed with exit code {ret}")
+        finally:
+            os.chdir(old)
+
+    return exepath
