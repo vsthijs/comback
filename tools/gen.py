@@ -54,7 +54,7 @@ class FunctionBuilder:
         data += len(self.code).to_bytes(8, "little")
         data += self.code
 
-        return data
+        return len(data).to_bytes(8, "little") + data
 
 
 class BytecodeBuilder:
