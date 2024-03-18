@@ -182,7 +182,6 @@ const Function = struct {
 
         const rets_sz = std.mem.readIntSliceLittle(usize, bytes[ip .. ip + @sizeOf(usize)]);
         ip += @sizeOf(usize);
-        std.log.debug("{d} ret types", .{rets_sz});
 
         var rets: []VMType = try allocator.alloc(VMType, rets_sz);
         var processed_rets: usize = 0;
@@ -196,14 +195,16 @@ const Function = struct {
         const code_sz = std.mem.readIntSliceLittle(usize, bytes[ip .. ip + @sizeOf(usize)]);
         ip += @sizeOf(usize);
         var code: []u8 = try allocator.alloc(u8, code_sz);
-        code = bytes[ip .. ip + code_sz];
+        std.mem.copy(u8, code, bytes[ip .. ip + code_sz]);
+        std.log.debug("- code: {d} bytes", .{code.len});
 
         return Function{ .name = name, .args = args, .rets = rets, .code = code, ._allocator = allocator };
     }
 
     pub fn deinit(self: *const Function) void {
-        // self._allocator.free(self.rets);
-        // self._allocator.free(self.args);
+        self._allocator.free(self.rets);
+        self._allocator.free(self.args);
+        self._allocator.free(self.code);
         _ = self;
     }
 };
@@ -238,7 +239,7 @@ const Binary = struct {
 
         var functions = try allocator.alloc(Function, function_c);
         var processed_funcs: usize = 0;
-        while (functions.len < function_c) {
+        while (processed_funcs < function_c) {
             const fn_sz = std.mem.readIntSliceLittle(usize, bytes[ip .. ip + @sizeOf(usize)]);
             ip += @sizeOf(usize);
             functions[processed_funcs] = (try Function.from_bytes(bytes[ip .. ip + fn_sz], allocator));
@@ -282,7 +283,11 @@ pub fn main() !void {
     const program = try argv.next(allocator).?;
     defer allocator.free(program);
 
-    const file_path = try argv.next(allocator).?;
+    const file_path = try argv.next(allocator) orelse {
+        std.log.err("expected input file argument.", .{});
+        std.log.info("usage: {s} <file>", .{program});
+        return;
+    };
     defer allocator.free(file_path);
 
     const file = try read_file(file_path, allocator);
@@ -290,7 +295,4 @@ pub fn main() !void {
 
     var bin = try Binary.from_bytes(file, allocator);
     defer bin.deinit();
-
-    // std.debug.print("{s}", .{file});
-    _ = program;
 }
