@@ -4,6 +4,7 @@ Contains common used tools for testing and manipulation of binaries
 
 from dataclasses import dataclass
 import sys
+import typing
 
 
 def i2t(i: int) -> str:
@@ -154,3 +155,18 @@ class BinaryBuilder:
         for ii in self.functions:
             data += ii.to_bytes()
         return data
+
+
+class ExpectError(Exception):
+    pass
+
+
+def expect(fn: typing.Callable, e: type[Exception], *args, **kwargs):
+    try:
+        fn(*args, **kwargs)
+        raise ExpectError(
+            f"{fn.__name__} didn't raise the expected exception '{e.__name__}'"
+        )
+    except e as ex:
+        print(f"expected {e}")
+        return
