@@ -1,3 +1,9 @@
+# zig cache
 **/zig-cache
-*.o
 **/zig-out
+
+# python cache
+**/__pycache__
+
+# comback binaries
+*.cbc
