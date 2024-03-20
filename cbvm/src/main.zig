@@ -205,7 +205,6 @@ const Function = struct {
         self._allocator.free(self.rets);
         self._allocator.free(self.args);
         self._allocator.free(self.code);
-        _ = self;
     }
 };
 
@@ -259,11 +258,11 @@ const Binary = struct {
     }
 };
 
-fn read_file(path: []u8, allocator: std.mem.Allocator) ![]u8 {
+fn read_file(path: [:0]const u8, allocator: std.mem.Allocator) ![]u8 {
     var path_buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
     const realpath = try std.fs.realpath(path, &path_buffer);
 
-    const file = try std.fs.openFileAbsolute(realpath, .{ .read = true });
+    const file = try std.fs.openFileAbsolute(realpath, .{});
     defer file.close();
 
     return try file.readToEndAlloc(allocator, std.math.maxInt(usize));
@@ -280,15 +279,15 @@ pub fn main() !void {
     var argv = std.process.args();
     defer argv.deinit();
 
-    const program = try argv.next(allocator).?;
-    defer allocator.free(program);
+    const program = argv.next().?;
+    // defer allocator.free(program);
 
-    const file_path = try argv.next(allocator) orelse {
+    const file_path = argv.next() orelse {
         std.log.err("expected input file argument.", .{});
         std.log.info("usage: {s} <file>", .{program});
         return;
     };
-    defer allocator.free(file_path);
+    // defer allocator.free(file_path);
 
     const file = try read_file(file_path, allocator);
     defer allocator.free(file);
