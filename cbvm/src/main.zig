@@ -1,5 +1,7 @@
 const std = @import("std");
 
+var IS_TESTING: bool = false;
+
 const VMError = error{
     StackUnderflow,
     DecodeError,
@@ -167,7 +169,6 @@ const Function = struct {
         const name_sz = std.mem.readIntSliceLittle(usize, bytes[0..@sizeOf(usize)]);
         var name = bytes[ip .. ip + name_sz];
         ip += name_sz;
-        std.log.debug("fn {s}", .{name});
 
         const args_sz = std.mem.readIntSliceLittle(usize, bytes[ip .. ip + @sizeOf(usize)]);
         ip += @sizeOf(usize);
@@ -175,7 +176,6 @@ const Function = struct {
         var processed_args: usize = 0;
         while (processed_args < args_sz) {
             args[processed_args] = try VMType.from_byte(bytes[ip]);
-            std.log.debug("- arg: {s}", .{@tagName(args[processed_args])});
             ip += 1;
             processed_args += 1;
         }
@@ -187,7 +187,6 @@ const Function = struct {
         var processed_rets: usize = 0;
         while (processed_rets < rets_sz) {
             rets[processed_rets] = try VMType.from_byte(bytes[ip]);
-            std.log.debug("- ret: {s}", .{@tagName(rets[processed_rets])});
             ip += 1;
             processed_rets += 1;
         }
@@ -196,7 +195,15 @@ const Function = struct {
         ip += @sizeOf(usize);
         var code: []u8 = try allocator.alloc(u8, code_sz);
         std.mem.copy(u8, code, bytes[ip .. ip + code_sz]);
-        std.log.debug("- code: {d} bytes", .{code.len});
+
+        std.log.debug("func {s}", .{name});
+        for (args) |arg| {
+            std.log.debug("< {d}", .{@intFromEnum(arg)});
+        }
+        for (rets) |ret| {
+            std.log.debug("> {d}", .{@intFromEnum(ret)});
+        }
+        std.log.debug("= {d}", .{code.len});
 
         return Function{ .name = name, .args = args, .rets = rets, .code = code, ._allocator = allocator };
     }
@@ -233,7 +240,6 @@ const Binary = struct {
         }
 
         const function_c = std.mem.readIntSliceLittle(usize, bytes[5 .. 5 + @sizeOf(usize)]);
-        std.log.debug("{d} functions in binary", .{function_c});
         var ip: usize = 5 + @sizeOf(usize);
 
         var functions = try allocator.alloc(Function, function_c);
@@ -287,6 +293,12 @@ pub fn main() !void {
         std.log.info("usage: {s} <file>", .{program});
         return;
     };
+
+    if (argv.next()) |flag| {
+        if (std.mem.eql(u8, flag, "--test")) {
+            IS_TESTING = true;
+        }
+    }
     // defer allocator.free(file_path);
 
     const file = try read_file(file_path, allocator);
