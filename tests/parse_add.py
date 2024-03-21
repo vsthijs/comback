@@ -6,11 +6,18 @@ def main():
     try:
         with open("parse_add.cbc", "wb") as f:
             f.write(builder.to_bytes())
-        proc = subprocess.Popen([executable(), "parse_add.cbc", "--test"], stdout=subprocess.PIPE)
-        result = proc.wait()
-        
-        # TODO: silence output of cbvm
-        # TODO: check output of cbvm
-        assert result == 0, "vm failed"
+        proc = subprocess.run([executable(), "parse_add.cbc", "--test"], capture_output=True)
+        stderr = proc.stderr.decode().strip()  # for some reason, the binary outputs to stderr?
+
+        output = '\n'.join([
+            "debug: func add",
+            "debug: < 1",
+            "debug: < 1",
+            "debug: > 1",
+            "debug: = 4"
+        ])
+
+        assert proc.returncode == 0, stderr
+        assert stderr == output, f"'{stderr}' != '{output}'"
     finally:
         os.remove("parse_add.cbc")

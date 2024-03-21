@@ -189,7 +189,7 @@ def executable() -> str:
     else:
         raise RuntimeError("unrecognized platform.")
 
-    if not os.path.exists(exepath):
+    if not os.path.exists(exepath) or True:
         old = os.getcwd()
         try:
             os.chdir(cbvmdir)

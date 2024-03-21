@@ -196,14 +196,16 @@ const Function = struct {
         var code: []u8 = try allocator.alloc(u8, code_sz);
         std.mem.copy(u8, code, bytes[ip .. ip + code_sz]);
 
-        std.log.debug("func {s}", .{name});
-        for (args) |arg| {
-            std.log.debug("< {d}", .{@intFromEnum(arg)});
+        if (IS_TESTING) {
+            std.log.debug("func {s}", .{name});
+            for (args) |arg| {
+                std.log.debug("< {d}", .{@intFromEnum(arg)});
+            }
+            for (rets) |ret| {
+                std.log.debug("> {d}", .{@intFromEnum(ret)});
+            }
+            std.log.debug("= {d}", .{code.len});
         }
-        for (rets) |ret| {
-            std.log.debug("> {d}", .{@intFromEnum(ret)});
-        }
-        std.log.debug("= {d}", .{code.len});
 
         return Function{ .name = name, .args = args, .rets = rets, .code = code, ._allocator = allocator };
     }
