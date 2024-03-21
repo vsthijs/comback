@@ -9,7 +9,7 @@ import os
 import subprocess
 
 
-testsdir = os.path.dirname(__file__)
+testsdir = os.path.abspath(os.path.dirname(__file__))
 projdir = os.path.dirname(testsdir)
 cbvmdir = os.path.join(projdir, "cbvm")
 
@@ -28,9 +28,10 @@ class Function:
     def __str__(self) -> str:
         return (
             f"{self.name}({', '.join([i2t(i) for i in self.args])}) -> ({', '.join([i2t(i) for i in self.rets])}) "
-            + "{"
-            + str(len(self.code))
-            + " bytes}"
+            + "{\n"
+            + "      "
+            + str((self.code))
+            + "\n    }"
         )
 
 
@@ -148,7 +149,7 @@ class FunctionBuilder:
 
 class BinaryBuilder:
     def __init__(self):
-        self.functions = []
+        self.functions: list[FunctionBuilder] = []
 
     def add_function(self):
         fn = FunctionBuilder()
@@ -162,6 +163,13 @@ class BinaryBuilder:
         for ii in self.functions:
             data += ii.to_bytes()
         return data
+
+    def to_binary(self) -> Binary:
+        return Binary(
+            b"cbvm",
+            0,
+            [Function(f.name, f.args, f.rets, f.code) for f in self.functions],
+        )
 
 
 class ExpectError(Exception):
@@ -201,3 +209,73 @@ def executable() -> str:
             os.chdir(old)
 
     return exepath
+
+
+def u8(i: int) -> bytes:
+    return (i).to_bytes(1, "little")
+
+
+def u16(i: int) -> bytes:
+    return (i).to_bytes(2, "little")
+
+
+def u64(i: int, signed=False) -> bytes:
+    return (i).to_bytes(8, "little", signed=signed)
+
+
+def v2b(type: typing.Literal[UINT, INT, BOOL], value: int) -> bytes:
+    if type == UINT:
+        return u64(value)
+    elif type == INT:
+        return u64(value, True)
+    elif type == BOOL:
+        return u8(value)
+    else:
+        raise TypeError("expected UINT, INT or BOOL")
+
+
+class Inst:
+    def opcode(name: str):
+        return {
+            # basic
+            "halt": 0,
+            "push": 1,  # <type> (value)
+            "add": 2,
+            "sub": 3,
+            "mul": 4,
+            "div": 5,
+            "dup": 6,  # (offset)
+            "ret": 7,
+            # misc.
+        }[name]
+
+    @staticmethod
+    def halt() -> bytes:
+        return u8(Inst.opcode("halt"))
+
+    @staticmethod
+    def push(type: typing.Literal[UINT, INT, BOOL], value: int) -> bytes:
+        return u8(Inst.opcode("push")) + u8(type) + v2b(type, value)
+
+    @staticmethod
+    def add() -> bytes:
+        return u8(Inst.opcode("add"))
+
+    @staticmethod
+    def sub() -> bytes:
+        return u8(Inst.opcode("sub"))
+
+    @staticmethod
+    def mul() -> bytes:
+        return u8(Inst.opcode("mul"))
+
+    @staticmethod
+    def div() -> bytes:
+        return u8(Inst.opcode("div"))
+
+    @staticmethod
+    def dup(offset: int) -> bytes:
+        return u8(Inst.opcode("dup")) + u8(offset)
+
+    def ret() -> bytes:
+        return u8(Inst.opcode("ret"))

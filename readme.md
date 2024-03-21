@@ -31,3 +31,8 @@ struct Function {
 ### Types
 
 Types are encoded as a single byte. There are currently 3 types: `uint`(0), `int`(1) and `bool`(2).
+
+
+## ISA
+
+Every instruction will be encoded using one byte, and, if it has operands, add them after the instruction. See `class Inst` in `tests/common.py`.

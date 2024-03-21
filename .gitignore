@@ -7,3 +7,6 @@
 
 # comback binaries
 *.cbc
+
+# 
+sandbox/
