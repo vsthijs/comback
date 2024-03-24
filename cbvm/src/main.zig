@@ -10,6 +10,11 @@ const VMError = error{
     InvalidBinaryFormat,
     InvalidBinaryVersion,
     InvalidBytecode,
+    InvalidArguments,
+    TypeError,
+    IllegalInstruction,
+    ZeroDivisionError,
+    ImplicitReturn,
 };
 
 const VMType = enum {
@@ -29,170 +34,200 @@ const VMType = enum {
 
 const VMValue = struct {
     type: VMType,
-    value: union { int: isize, uint: usize, bool: bool },
+    value: union { int: i64, uint: u64, bool: bool },
 
-    pub fn from_usize(value: usize) VMValue {
+    pub fn from_u64(value: u64) VMValue {
         return VMValue{ .type = VMType.uint, .value = .{ .uint = value } };
     }
+
+    pub fn from_i64(value: i64) VMValue {
+        return VMValue{ .type = VMType.int, .value = .{ .int = value } };
+    }
+
+    pub fn to_u64(self: VMValue) !u64 {
+        if (self.type != VMType.uint) {
+            return VMError.TypeError;
+        } else {
+            return self.value.uint;
+        }
+    }
+
+    pub fn to_i64(self: VMValue) !i64 {
+        if (self.type != VMType.int) {
+            return VMError.TypeError;
+        } else {
+            return self.value.int;
+        }
+    }
+
+    pub fn add(self: VMValue, other: VMValue) !VMValue {
+        if (self.type != other.type) {
+            return VMError.TypeError;
+        }
+        var result = self;
+        switch (result.type) {
+            .uint => {
+                result.value.uint += other.value.uint;
+            },
+            .int => {
+                result.value.int += other.value.int;
+            },
+            else => return VMError.TypeError,
+        }
+        return result;
+    }
+
+    pub fn sub(self: VMValue, other: VMValue) !VMValue {
+        if (self.type != other.type) {
+            return VMError.TypeError;
+        }
+        var result = self;
+        switch (result.type) {
+            .uint => {
+                result.value.uint -= other.value.uint;
+            },
+            .int => {
+                result.value.int -= other.value.int;
+            },
+            else => return VMError.TypeError,
+        }
+        return result;
+    }
+
+    pub fn mul(self: VMValue, other: VMValue) !VMValue {
+        if (self.type != other.type) {
+            return VMError.TypeError;
+        }
+        var result = self;
+        switch (result.type) {
+            .uint => {
+                result.value.uint *= other.value.uint;
+            },
+            .int => {
+                result.value.int *= other.value.int;
+            },
+            else => return VMError.TypeError,
+        }
+        return result;
+    }
+
+    pub fn div(self: VMValue, other: VMValue) !VMValue {
+        if (self.type != other.type) {
+            return VMError.TypeError;
+        }
+        var result = self;
+        switch (result.type) {
+            .uint => {
+                if (other.value.uint == 0) return VMError.ZeroDivisionError;
+                result.value.uint = @divExact(result.value.uint, other.value.uint);
+            },
+            .int => {
+                if (other.value.int == 0) return VMError.ZeroDivisionError;
+                result.value.int = @divExact(result.value.int, other.value.int);
+            },
+            else => return VMError.TypeError,
+        }
+        return result;
+    }
 };
-test "VMValue.from_usize" {
+test "VMValue.from_u64" {
     const val = 694200198;
-    const vmv = VMValue.from_usize(val);
+    const vmv = VMValue.from_u64(val);
     try std.testing.expect(vmv.type == VMType.uint);
     try std.testing.expect(vmv.value.uint == val);
 }
 
-const VMInstruction = struct {
-    type: enum(u16) {
-        Hlt,
-        Push,
-        Load,
-        Store,
-        _,
-    },
-    operand: usize,
+const VMOpType = enum(u16) {
+    Nop,
+    Push,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Dup,
+    Ret,
+    _,
+};
 
-    pub fn hlt() VMInstruction {
-        return VMInstruction{ .type = .Hlt };
+const VMInstruction = struct {
+    type: VMOpType,
+    operand: ?VMValue,
+
+    pub fn nop() VMInstruction {
+        return VMInstruction{ .type = .Nop, .operand = null };
     }
 
-    pub fn push(operand: usize) VMInstruction {
+    pub fn push(operand: VMValue) VMInstruction {
         return VMInstruction{ .type = .Push, .operand = operand };
     }
 
-    pub fn load(operand: usize) VMError!VMInstruction {
-        if (operand < 32) {
-            return VMInstruction{ .type = .Load, .operand = operand };
-        } else {
-            return VMError.UnknownRegister;
-        }
+    pub fn add() VMInstruction {
+        return VMInstruction{ .type = .Add, .operand = null };
     }
 
-    pub fn store(operand: usize) VMError!VMInstruction {
-        if (operand < 32) {
-            return VMInstruction{ .type = .Store, .operand = operand };
-        } else {
-            return VMError.UnknownRegister;
-        }
-    }
-};
-
-const VMContext = struct {
-    allocator: std.heap.ArenaAllocator,
-    heap: std.mem.Allocator,
-    stack: std.ArrayList(VMValue),
-    code: []u8,
-    registers: [32]VMValue,
-
-    _ip: usize,
-
-    pub fn new(code: []u8) VMContext {
-        var allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        var heap = allocator.allocator();
-        var stack = std.ArrayList(VMValue).init(heap);
-        return VMContext{ .allocator = allocator, .heap = heap, .stack = stack, .code = code, .registers = undefined, ._ip = 0 };
+    pub fn sub() VMInstruction {
+        return VMInstruction{ .type = .Sub, .operand = null };
     }
 
-    pub fn deinit(self: *VMContext) void {
-        self.stack.deinit();
-        self.allocator.deinit();
+    pub fn mul() VMInstruction {
+        return VMInstruction{ .type = .Mul, .operand = null };
     }
 
-    pub fn push(self: *VMContext, value: VMValue) !void {
-        // std.debug.print("push <- {}\n", .{value});
-        try self.stack.append(value);
+    pub fn div() VMInstruction {
+        return VMInstruction{ .type = .Div, .operand = null };
     }
 
-    pub fn pop(self: *VMContext) VMError!VMValue {
-        var val = self.stack.popOrNull();
-        if (val == null) {
-            return VMError.StackUnderflow;
-        } else {
-            // std.debug.print("pop -> {}\n", .{val.?});
-            return val.?;
-        }
+    pub fn dup(operand: VMValue) VMInstruction {
+        return VMInstruction{ .type = .Dup, .operand = operand };
     }
 
-    fn read_int(self: *VMContext, sz: type) VMError!sz {
-        if (self._ip + @sizeOf(sz) < self.code.len) {
-            self._ip += @sizeOf(sz);
-            return std.mem.readIntSliceLittle(sz, self.code[self._ip - @sizeOf(sz) .. self._ip]);
-        } else {
-            return VMError.CodeOverflow;
-        }
-    }
-
-    pub fn decode(self: *VMContext) VMError!VMInstruction {
-        const op = try self.read_int(u16);
-        return switch (op) {
-            0 => VMInstruction.hlt(),
-            1 => VMInstruction.push(self.read_int(usize)),
-            2 => VMInstruction.load(self.read_int(u8)),
-            3 => VMInstruction.store(self.read_int(u8)),
-            else => VMError.DecodeError,
-        };
-    }
-
-    pub fn execute(self: *VMContext, instruction: VMInstruction) void {
-        switch (instruction.type) {
-            .Hlt => {},
-            .Push => self.push(VMValue.from_usize(instruction.operand)),
-            .Load => self.push(self.registers[instruction.operand]),
-            .Store => self.registers[instruction.operand] = try self.pop(),
-        }
+    pub fn ret() VMInstruction {
+        return VMInstruction{ .type = .Ret, .operand = null };
     }
 };
-
-test "VMContext stack" {
-    var buf = [0]u8{};
-    var vm = VMContext.new(&buf);
-    defer vm.deinit();
-    try vm.push(VMValue.from_usize(69));
-    var val = try vm.pop();
-    try std.testing.expect(val.value.uint == 69);
-}
 
 const Function = struct {
-    // func_sz: usize,
+    // func_sz: u64,
     name: []u8,
-    // arg_c: usize,
+    // arg_c: u64,
     args: []VMType,
-    // ret_c: usize,
+    // ret_c: u64,
     rets: []VMType,
-    // code_sz: usize,
+    // code_sz: u64,
     code: []u8,
 
     _allocator: std.mem.Allocator,
+    _decoded: ?[]VMInstruction,
 
     pub fn from_bytes(bytes: []u8, allocator: std.mem.Allocator) !Function {
-        var ip: usize = @sizeOf(usize);
-        const name_sz = std.mem.readIntSliceLittle(usize, bytes[0..@sizeOf(usize)]);
+        var ip: u64 = @sizeOf(u64);
+        const name_sz = std.mem.readIntSliceLittle(u64, bytes[0..@sizeOf(u64)]);
         var name = bytes[ip .. ip + name_sz];
         ip += name_sz;
 
-        const args_sz = std.mem.readIntSliceLittle(usize, bytes[ip .. ip + @sizeOf(usize)]);
-        ip += @sizeOf(usize);
+        const args_sz = std.mem.readIntSliceLittle(u64, bytes[ip .. ip + @sizeOf(u64)]);
+        ip += @sizeOf(u64);
         var args: []VMType = try allocator.alloc(VMType, args_sz);
-        var processed_args: usize = 0;
+        var processed_args: u64 = 0;
         while (processed_args < args_sz) {
             args[processed_args] = try VMType.from_byte(bytes[ip]);
             ip += 1;
             processed_args += 1;
         }
 
-        const rets_sz = std.mem.readIntSliceLittle(usize, bytes[ip .. ip + @sizeOf(usize)]);
-        ip += @sizeOf(usize);
+        const rets_sz = std.mem.readIntSliceLittle(u64, bytes[ip .. ip + @sizeOf(u64)]);
+        ip += @sizeOf(u64);
 
         var rets: []VMType = try allocator.alloc(VMType, rets_sz);
-        var processed_rets: usize = 0;
+        var processed_rets: u64 = 0;
         while (processed_rets < rets_sz) {
             rets[processed_rets] = try VMType.from_byte(bytes[ip]);
             ip += 1;
             processed_rets += 1;
         }
 
-        const code_sz = std.mem.readIntSliceLittle(usize, bytes[ip .. ip + @sizeOf(usize)]);
-        ip += @sizeOf(usize);
+        const code_sz = std.mem.readIntSliceLittle(u64, bytes[ip .. ip + @sizeOf(u64)]);
+        ip += @sizeOf(u64);
         var code: []u8 = try allocator.alloc(u8, code_sz);
         std.mem.copy(u8, code, bytes[ip .. ip + code_sz]);
 
@@ -207,26 +242,138 @@ const Function = struct {
             std.log.debug("= {d}", .{code.len});
         }
 
-        return Function{ .name = name, .args = args, .rets = rets, .code = code, ._allocator = allocator };
+        return Function{ .name = name, .args = args, .rets = rets, .code = code, ._allocator = allocator, ._decoded = null };
     }
 
     pub fn deinit(self: *const Function) void {
         self._allocator.free(self.rets);
         self._allocator.free(self.args);
         self._allocator.free(self.code);
+        if (self._decoded) |d| {
+            self._allocator.free(d);
+        }
+    }
+
+    pub fn decode(self: *Function) ![]VMInstruction {
+        return self._decoded orelse {
+            var ip: u64 = 0;
+            var _decoded = std.ArrayList(VMInstruction).init(self._allocator);
+            defer _decoded.deinit();
+            while (ip < self.code.len) {
+                try _decoded.append(switch (self.code[ip]) {
+                    0 => VMInstruction.nop(),
+                    1 => blk: { // push <type> (value)
+                        ip += 1;
+                        const t = try VMType.from_byte(self.code[ip - 1]);
+                        var v: VMValue = undefined;
+                        if (t == .uint) {
+                            ip += 8;
+                            v = VMValue{ .type = t, .value = .{ .uint = std.mem.readIntSliceLittle(u64, self.code[ip - 8 .. ip]) } };
+                        } else if (t == .int) {
+                            ip += 8;
+                            v = VMValue{ .type = t, .value = .{ .int = std.mem.readIntSliceLittle(i64, self.code[ip - 8 .. ip]) } };
+                        } else if (t == .bool) {
+                            ip += 1;
+                            v = VMValue{ .type = t, .value = .{ .bool = (self.code[ip - 1] != 0) } };
+                        }
+                        break :blk VMInstruction.push(v);
+                    },
+                    2 => VMInstruction.add(),
+                    3 => VMInstruction.sub(),
+                    4 => VMInstruction.mul(),
+                    5 => VMInstruction.div(),
+                    6 => blk: { // dup (offset)
+                        ip += 8;
+                        const offset = std.mem.readIntSliceLittle(u64, self.code[ip - 8 .. ip]);
+                        break :blk VMInstruction.dup(VMValue.from_u64(offset));
+                    },
+                    7 => VMInstruction.ret(),
+                    else => return VMError.InvalidBytecode,
+                });
+                ip += 1;
+            }
+            self._decoded = try _decoded.toOwnedSlice();
+            if (self._decoded) |a| {
+                return a;
+            } else unreachable;
+        };
+    }
+
+    pub fn exec(self: *Function, args: []VMValue) ![]VMValue {
+        // type checking
+        for (self.args, args) |_type, _arg| {
+            if (_type != _arg.type) {
+                std.log.err("invalid arguments found", .{});
+                return VMError.InvalidArguments;
+            }
+        }
+
+        std.log.info("arguments checked", .{});
+
+        var stack = std.ArrayList(VMValue).init(self._allocator);
+        defer stack.deinit();
+
+        for (args) |arg| {
+            std.log.info("stack.append({any})", .{arg});
+            try stack.append(arg);
+        }
+
+        const code = try self.decode();
+
+        var ip: u64 = 0;
+        while (ip < code.len) {
+            switch (code[ip].type) {
+                .Nop => ip += 1,
+                .Push => {
+                    try stack.append(code[ip].operand.?);
+                    ip += 1;
+                },
+                .Add, .Sub, .Mul, .Div => {
+                    std.log.info("stack.len = {d}", .{stack.items.len});
+                    const b_v = stack.pop();
+                    const a_v = stack.pop();
+
+                    try stack.append(switch (code[ip].type) {
+                        .Add => try a_v.add(b_v),
+                        .Sub => try a_v.sub(b_v),
+                        .Mul => try a_v.mul(b_v),
+                        .Div => try a_v.div(b_v),
+                        else => unreachable,
+                    });
+                    ip += 1;
+                },
+                .Dup => {
+                    try stack.append(stack.items[stack.items.len - 1 - try code[ip].operand.?.to_u64()]);
+                    ip += 1;
+                },
+                .Ret => {
+                    const rets = try stack.toOwnedSlice();
+                    for (self.rets, rets) |_type, _ret| {
+                        if (_type != _ret.type) {
+                            return VMError.InvalidArguments;
+                        }
+                    }
+                    return rets;
+                },
+
+                else => return VMError.IllegalInstruction,
+            }
+        }
+
+        return VMError.ImplicitReturn;
     }
 };
 
 const Binary = struct {
     // magic: [4]u8, // = "cbvm"
     // version: u8, // = 0
-    // function_c: usize
+    // function_c: u64
     functions: []Function,
 
     _allocator: std.mem.Allocator,
 
     pub fn from_bytes(bytes: []u8, allocator: std.mem.Allocator) !Binary {
-        const min_sz = 5 + @sizeOf(usize);
+        const min_sz = 5 + @sizeOf(u64);
         if (bytes.len < min_sz) {
             return VMError.InvalidBinaryFormat;
         }
@@ -241,14 +388,14 @@ const Binary = struct {
             return VMError.InvalidBinaryVersion;
         }
 
-        const function_c = std.mem.readIntSliceLittle(usize, bytes[5 .. 5 + @sizeOf(usize)]);
-        var ip: usize = 5 + @sizeOf(usize);
+        const function_c = std.mem.readIntSliceLittle(u64, bytes[5 .. 5 + @sizeOf(u64)]);
+        var ip: u64 = 5 + @sizeOf(u64);
 
         var functions = try allocator.alloc(Function, function_c);
-        var processed_funcs: usize = 0;
+        var processed_funcs: u64 = 0;
         while (processed_funcs < function_c) {
-            const fn_sz = std.mem.readIntSliceLittle(usize, bytes[ip .. ip + @sizeOf(usize)]);
-            ip += @sizeOf(usize);
+            const fn_sz = std.mem.readIntSliceLittle(u64, bytes[ip .. ip + @sizeOf(u64)]);
+            ip += @sizeOf(u64);
             functions[processed_funcs] = (try Function.from_bytes(bytes[ip .. ip + fn_sz], allocator));
             processed_funcs += 1;
             ip += fn_sz;
@@ -273,7 +420,7 @@ fn read_file(path: [:0]const u8, allocator: std.mem.Allocator) ![]u8 {
     const file = try std.fs.openFileAbsolute(realpath, .{});
     defer file.close();
 
-    return try file.readToEndAlloc(allocator, std.math.maxInt(usize));
+    return try file.readToEndAlloc(allocator, std.math.maxInt(u64));
 }
 
 pub fn main() !void {
@@ -281,6 +428,7 @@ pub fn main() !void {
         .safety = true,
         // .verbose_log = true,
     }){};
+    // TODO: fix memory leaks
     defer _ = gpa.deinit();
     var allocator = gpa.allocator();
 
@@ -301,11 +449,18 @@ pub fn main() !void {
             IS_TESTING = true;
         }
     }
-    // defer allocator.free(file_path);
 
     const file = try read_file(file_path, allocator);
     defer allocator.free(file);
 
     var bin = try Binary.from_bytes(file, allocator);
     defer bin.deinit();
+
+    if (!IS_TESTING) {
+        var func = bin.functions[0];
+        std.log.debug("{s}(...)", .{func.name});
+        var args = [_]VMValue{ VMValue.from_i64(420), VMValue.from_i64(69) };
+        const result = try func.exec(&args);
+        std.log.debug("add(420i, 69i) -> {d}", .{try result[0].to_i64()});
+    }
 }

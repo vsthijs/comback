@@ -238,7 +238,7 @@ class Inst:
     def opcode(name: str):
         return {
             # basic
-            "halt": 0,
+            "nop": 0,
             "push": 1,  # <type> (value)
             "add": 2,
             "sub": 3,
@@ -250,8 +250,8 @@ class Inst:
         }[name]
 
     @staticmethod
-    def halt() -> bytes:
-        return u8(Inst.opcode("halt"))
+    def nop() -> bytes:
+        return u8(Inst.opcode("nop"))
 
     @staticmethod
     def push(type: typing.Literal[UINT, INT, BOOL], value: int) -> bytes:
