@@ -137,6 +137,73 @@ test "VMValue.from_u64" {
     try std.testing.expect(vmv.value.uint == val);
 }
 
+const VMStack = struct {
+    allocator: std.mem.Allocator,
+    items: []VMValue,
+    size: usize,
+
+    pub fn init(initial_cap: usize, allocator: std.mem.Allocator) !VMStack {
+        return VMStack{
+            .allocator = allocator,
+            .items = try allocator.alloc(VMValue, initial_cap),
+            .size = 0,
+        };
+    }
+
+    pub fn deinit(self: *VMStack) void {
+        self.allocator.free(self.items);
+    }
+
+    pub fn push(self: *VMStack, item: VMValue) !void {
+        if (self.size >= self.items.len) {
+            self.items = try self.allocator.realloc(self.items, self.items.len + 8);
+        }
+        self.items[self.size] = item;
+        self.size += 1;
+    }
+
+    pub fn pop(self: *VMStack) ?VMValue {
+        if (self.size >= 1) {
+            self.size -= 1;
+            return self.items[self.size];
+        } else {
+            return null;
+        }
+    }
+
+    pub fn eq(self: *VMStack, other: []VMType) bool {
+        if (self.size != other.len) {
+            return false;
+        } else {
+            for (self.items[0..self.size], other[0..self.size]) |a, b| {
+                if (a.type != b) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    pub fn owned_slice(self: *VMStack) ![]VMValue {
+        var items = try self.allocator.alloc(VMValue, self.size);
+        for (self.items[0..self.size], 0..self.size) |item, index| {
+            items[index] = item;
+        }
+        return items;
+    }
+};
+test "VMStack grow" {
+    var allocator = std.testing.allocator;
+    var stack = try VMStack.init(8, allocator);
+    defer stack.deinit();
+    for (0..16) |_| {
+        try stack.push(VMValue.from_i64(699));
+    }
+    for (0..16) |_| {
+        try std.testing.expect(try stack.pop().?.to_i64() == 699);
+    }
+}
+
 const VMOpType = enum(u16) {
     Nop,
     Push,
@@ -249,9 +316,6 @@ const Function = struct {
         self._allocator.free(self.rets);
         self._allocator.free(self.args);
         self._allocator.free(self.code);
-        if (self._decoded) |d| {
-            self._allocator.free(d);
-        }
     }
 
     pub fn decode(self: *Function) ![]VMInstruction {
@@ -310,30 +374,32 @@ const Function = struct {
 
         std.log.info("arguments checked", .{});
 
-        var stack = std.ArrayList(VMValue).init(self._allocator);
+        var stack = try VMStack.init(8, self._allocator);
         defer stack.deinit();
 
         for (args) |arg| {
-            std.log.info("stack.append({any})", .{arg});
-            try stack.append(arg);
+            std.log.info("push arg ({any}) (", .{arg});
+            try stack.push(arg);
+            std.log.info(")", .{});
         }
 
         const code = try self.decode();
+        defer self._allocator.free(code);
 
         var ip: u64 = 0;
         while (ip < code.len) {
             switch (code[ip].type) {
                 .Nop => ip += 1,
                 .Push => {
-                    try stack.append(code[ip].operand.?);
+                    try stack.push(code[ip].operand.?);
                     ip += 1;
                 },
                 .Add, .Sub, .Mul, .Div => {
                     std.log.info("stack.len = {d}", .{stack.items.len});
-                    const b_v = stack.pop();
-                    const a_v = stack.pop();
+                    const b_v = stack.pop().?;
+                    const a_v = stack.pop().?;
 
-                    try stack.append(switch (code[ip].type) {
+                    try stack.push(switch (code[ip].type) {
                         .Add => try a_v.add(b_v),
                         .Sub => try a_v.sub(b_v),
                         .Mul => try a_v.mul(b_v),
@@ -343,17 +409,15 @@ const Function = struct {
                     ip += 1;
                 },
                 .Dup => {
-                    try stack.append(stack.items[stack.items.len - 1 - try code[ip].operand.?.to_u64()]);
+                    try stack.push(stack.items[stack.items.len - 1 - try code[ip].operand.?.to_u64()]);
                     ip += 1;
                 },
                 .Ret => {
-                    const rets = try stack.toOwnedSlice();
-                    for (self.rets, rets) |_type, _ret| {
-                        if (_type != _ret.type) {
-                            return VMError.InvalidArguments;
-                        }
+                    if (stack.eq(self.rets)) {
+                        return try stack.owned_slice();
+                    } else {
+                        return VMError.InvalidArguments;
                     }
-                    return rets;
                 },
 
                 else => return VMError.IllegalInstruction,
@@ -426,7 +490,7 @@ fn read_file(path: [:0]const u8, allocator: std.mem.Allocator) ![]u8 {
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{
         .safety = true,
-        // .verbose_log = true,
+        .verbose_log = true,
     }){};
     // TODO: fix memory leaks
     defer _ = gpa.deinit();
@@ -461,6 +525,7 @@ pub fn main() !void {
         std.log.debug("{s}(...)", .{func.name});
         var args = [_]VMValue{ VMValue.from_i64(420), VMValue.from_i64(69) };
         const result = try func.exec(&args);
+        defer allocator.free(result);
         std.log.debug("add(420i, 69i) -> {d}", .{try result[0].to_i64()});
     }
 }
